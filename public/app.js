@@ -141,10 +141,9 @@
         }).join('');
     }
 
-    // Copy room link
+    // Copy room code
     document.getElementById('copyCodeBtn').addEventListener('click', () => {
-        const link = `${window.location.origin}/game?room=${roomCode}`;
-        navigator.clipboard.writeText(link).then(() => {
+        navigator.clipboard.writeText(roomCode).then(() => {
             const btn = document.getElementById('copyCodeBtn');
             btn.textContent = '✅';
             setTimeout(() => { btn.textContent = '📋'; }, 2000);
@@ -160,6 +159,20 @@
     document.getElementById('btnPlayAgain').addEventListener('click', () => {
         document.getElementById('gameOverOverlay').classList.add('hidden');
         document.getElementById('waitingOverlay').classList.remove('hidden');
+    });
+
+    // Exit lobby
+    document.getElementById('btnExitLobby').addEventListener('click', () => {
+        socket.disconnect();
+        window.location.href = '/';
+    });
+
+    // Leave game (mid-game)
+    document.getElementById('btnLeaveGame').addEventListener('click', () => {
+        if (confirm('Leave the game?')) {
+            socket.disconnect();
+            window.location.href = '/';
+        }
     });
 
     // ============ SETTINGS ============
@@ -229,6 +242,25 @@
             addChatMessage({ type: 'leave', message: `${data.playerName} left!` });
         });
 
+        // Sent when only 1 player remains during an active game
+        socket.on('backToWaiting', (data) => {
+            // Hide all game-related overlays
+            document.getElementById('gameContainer').classList.add('hidden');
+            document.getElementById('wordPickerOverlay').classList.add('hidden');
+            document.getElementById('gameOverOverlay').classList.add('hidden');
+            document.getElementById('turnEndOverlay')?.classList.add('hidden');
+            document.getElementById('pickingOverlay')?.classList.add('hidden');
+
+            // Show waiting room again
+            document.getElementById('waitingOverlay').classList.remove('hidden');
+            updateWaitingPlayers(data.players);
+
+            gameActive = false;
+            isDrawing = false;
+
+            addChatMessage({ type: 'system', message: data.message });
+        });
+
         socket.on('becameHost', () => {
             isHost = true;
             document.getElementById('btnStartGame').classList.remove('hidden');
@@ -265,12 +297,27 @@
                     canvas.style.cursor = 'default';
                     document.getElementById('chatInput').disabled = true;
                     document.getElementById('chatInput').placeholder = 'You are drawing!';
+                    document.getElementById('pickingOverlay').classList.add('hidden');
                 } else {
-                    document.getElementById('wordHint').textContent = `${data.drawerName} is choosing a word...`;
+                    document.getElementById('wordHint').textContent = `${data.drawerName} is choosing...`;
                     document.getElementById('toolbar').classList.add('hidden');
                     canvas.style.cursor = 'default';
                     document.getElementById('chatInput').disabled = false;
                     document.getElementById('chatInput').placeholder = 'Type your guess here...';
+                    document.getElementById('chatInput').focus();
+
+                    // Show picking overlay with drawer info
+                    const drawer = data.players.find(p => p.id === data.drawerId);
+                    if (drawer) {
+                        const avatarInner = drawer.avatar.customImage
+                            ? `<img class="custom-av" src="${drawer.avatar.customImage}" alt="avatar">`
+                            : drawer.avatar.emoji;
+                        document.getElementById('pickingAvatar').innerHTML = avatarInner;
+                        document.getElementById('pickingAvatar').style.background = `linear-gradient(135deg, ${drawer.avatar.color}, ${adjustColor(drawer.avatar.color, -30)})`;
+                        document.getElementById('pickingName').textContent = drawer.name;
+                    }
+                    document.getElementById('pickingTimer').textContent = '15';
+                    document.getElementById('pickingOverlay').classList.remove('hidden');
                 }
 
                 // Clear canvas for new turn
@@ -289,6 +336,7 @@
                 document.getElementById('gameContainer').classList.remove('hidden');
                 document.getElementById('wordPickerOverlay').classList.add('hidden');
                 document.getElementById('turnEndOverlay').classList.add('hidden');
+                document.getElementById('pickingOverlay').classList.add('hidden');
 
                 isDrawing = data.drawerId === myId;
                 maxTime = data.timeLeft;
@@ -303,10 +351,19 @@
                     document.getElementById('toolbar').classList.add('hidden');
                     canvas.style.cursor = 'default';
                     document.getElementById('wordHint').textContent = data.hint;
+                    document.getElementById('chatInput').focus();
                 }
 
                 document.getElementById('timerText').textContent = data.timeLeft;
             }
+        });
+
+        // Pick timer countdown (visible during word picking)
+        socket.on('pickTimer', (data) => {
+            const el = document.getElementById('pickingTimer');
+            if (el) el.textContent = data.timeLeft;
+            const drawerEl = document.getElementById('pickCountdownDrawer');
+            if (drawerEl) drawerEl.textContent = data.timeLeft + 's';
         });
 
         socket.on('wordChoices', (words) => {
@@ -406,8 +463,9 @@
                 const inner = p.avatar.customImage
                     ? `<img class="custom-av" src="${p.avatar.customImage}" alt="avatar">`
                     : p.avatar.emoji;
+                const winnerClass = p.position === 1 ? ' podium-winner' : '';
                 return `
-        <div class="podium-place">
+        <div class="podium-place${winnerClass}">
           <span class="podium-rank">${p.position === 1 ? '🥇' : p.position === 2 ? '🥈' : '🥉'}</span>
           <div class="podium-avatar" style="background:linear-gradient(135deg, ${p.avatar.color}, ${adjustColor(p.avatar.color, -30)})">
             ${inner}
@@ -559,6 +617,7 @@
             const fillColor = currentColor;
             floodFillAt(Math.floor(coords.x), Math.floor(coords.y), fillColor);
             socket.emit('fill', { x: Math.floor(coords.x), y: Math.floor(coords.y), color: fillColor });
+            strokeHistory.push([{ type: 'fill', x: Math.floor(coords.x), y: Math.floor(coords.y), color: fillColor }]);
             return;
         }
 
